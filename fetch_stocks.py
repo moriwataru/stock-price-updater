@@ -1,6 +1,7 @@
 """
 日本株 株価自動取得スクリプト
-毎日GitHub Actionsで実行 → Google スプレッドシートに書き込み
+- スプレッドシートのB列から証券コードを読み取る
+- 終値をF列、前日比(%)をG列に上書きする
 """
 
 import yfinance as yf
@@ -12,28 +13,10 @@ import os
 import json
 
 # ============================================================
-# 設定: 取得する銘柄コードリスト（300社分をここに記載）
-# ============================================================
-TICKERS = [
-    "7203.T",  # トヨタ自動車
-    "6758.T",  # ソニーグループ
-    "9984.T",  # ソフトバンクグループ
-    "8306.T",  # 三菱UFJフィナンシャル・グループ
-    "6861.T",  # キーエンス
-    "9432.T",  # NTT
-    "8035.T",  # 東京エレクトロン
-    "4063.T",  # 信越化学工業
-    "7741.T",  # HOYA
-    "6954.T",  # ファナック
-    # ↓ここに残りの銘柄コードを追加（例: "1234.T",）
-]
-
-# ============================================================
 # Google Sheets 設定
 # ============================================================
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")  # GitHub Secretsから取得
-SHEET_LATEST   = "最新株価"   # 最新データを上書きするシート
-SHEET_HISTORY  = "履歴"       # 日次で追記していくシート
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+SHEET_NAME     = "最新株価"
 
 # ============================================================
 # 関数定義
@@ -55,91 +38,26 @@ def get_gspread_client():
 
 
 def fetch_one(ticker: str):
-    """1銘柄の株価データを取得して辞書で返す"""
+    """1銘柄の終値と前日比(%)を取得して返す"""
     try:
         stock = yf.Ticker(ticker)
-        hist  = stock.history(period="2d")  # 前日比のため2日分取得
+        hist  = stock.history(period="2d")
 
         if hist.empty:
-            print(f"  WARNING  {ticker}: データなし")
-            return None
+            print(f"  WARNING {ticker}: データなし")
+            return None, None
 
         latest     = hist.iloc[-1]
         prev       = hist.iloc[-2] if len(hist) >= 2 else None
-        close      = latest["Close"]
+        close      = round(latest["Close"], 1)
         prev_close = prev["Close"] if prev is not None else None
-        change     = round(close - prev_close, 1)                        if prev_close else ""
-        change_pct = round((close - prev_close) / prev_close * 100, 2)  if prev_close else ""
+        change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else ""
 
-        # 銘柄名（取得失敗してもスキップ）
-        try:
-            info = stock.info
-            name = info.get("longName") or info.get("shortName") or ticker
-        except Exception:
-            name = ticker
+        return close, change_pct
 
-        return {
-            "ticker":     ticker,
-            "name":       name,
-            "date":       latest.name.strftime("%Y-%m-%d"),
-            "open":       round(latest["Open"],  1),
-            "high":       round(latest["High"],  1),
-            "low":        round(latest["Low"],   1),
-            "close":      round(close,           1),
-            "volume":     int(latest["Volume"]),
-            "prev_close": round(prev_close, 1)   if prev_close else "",
-            "change":     change,
-            "change_pct": change_pct,
-        }
     except Exception as e:
         print(f"  ERROR {ticker}: {e}")
-        return None
-
-
-def to_rows(data_list):
-    """辞書リストをスプレッドシート書き込み用の2次元リストに変換"""
-    return [
-        [
-            d["ticker"], d["name"], d["date"],
-            d["open"], d["high"], d["low"], d["close"],
-            d["volume"], d["prev_close"], d["change"], d["change_pct"],
-        ]
-        for d in data_list
-    ]
-
-
-def update_latest_sheet(ws, data_list, updated_at):
-    """「最新株価」シートを全件上書き"""
-    headers = [
-        "銘柄コード", "銘柄名", "取得日",
-        "始値", "高値", "安値", "終値",
-        "出来高", "前日終値", "前日比(円)", "前日比(%)",
-    ]
-    ws.clear()
-    ws.update("A1", [headers] + to_rows(data_list))
-    ws.format("A1:K1", {
-        "textFormat": {"bold": True},
-        "backgroundColor": {"red": 0.20, "green": 0.40, "blue": 0.75},
-        "horizontalAlignment": "CENTER",
-    })
-    ws.update("M1", [[f"最終更新: {updated_at}"]])
-    print(f"  OK 「{ws.title}」シート更新完了 ({len(data_list)} 銘柄)")
-
-
-def append_history_sheet(ws, data_list):
-    """「履歴」シートに今日分を追記（ヘッダーがなければ先に挿入）"""
-    existing = ws.get_all_values()
-    if not existing:
-        headers = [
-            "銘柄コード", "銘柄名", "取得日",
-            "始値", "高値", "安値", "終値",
-            "出来高", "前日終値", "前日比(円)", "前日比(%)",
-        ]
-        ws.append_row(headers)
-        ws.format("A1:K1", {"textFormat": {"bold": True}})
-
-    ws.append_rows(to_rows(data_list), value_input_option="USER_ENTERED")
-    print(f"  OK 「{ws.title}」シートに {len(data_list)} 行追記")
+        return None, None
 
 
 # ============================================================
@@ -150,41 +68,39 @@ def main():
     updated_at = datetime.now().strftime("%Y-%m-%d %H:%M JST")
     print(f"\n{'='*50}")
     print(f"  株価取得開始: {updated_at}")
-    print(f"  対象銘柄数: {len(TICKERS)}")
     print(f"{'='*50}\n")
 
-    # --- 株価取得 ---
-    data_list = []
-    for i, ticker in enumerate(TICKERS, 1):
-        print(f"  [{i:>3}/{len(TICKERS)}] {ticker} 取得中...")
-        result = fetch_one(ticker)
-        if result:
-            data_list.append(result)
-        time.sleep(0.5)  # API負荷軽減のため少し待機
-
-    print(f"\n  取得成功: {len(data_list)} / {len(TICKERS)} 銘柄\n")
-
-    if not data_list:
-        print("  WARNING 取得データが0件のため終了します")
-        return
-
-    # --- Google Sheets に書き込み ---
-    print("  Google Sheets に書き込み中...")
+    # --- Google Sheets に接続 ---
     client = get_gspread_client()
     ss     = client.open_by_key(SPREADSHEET_ID)
+    ws     = ss.worksheet(SHEET_NAME)
 
-    # シートが存在しない場合は自動作成
-    sheet_titles = [ws.title for ws in ss.worksheets()]
-    if SHEET_LATEST  not in sheet_titles:
-        ss.add_worksheet(title=SHEET_LATEST,  rows=400,    cols=15)
-    if SHEET_HISTORY not in sheet_titles:
-        ss.add_worksheet(title=SHEET_HISTORY, rows=100000, cols=15)
+    # --- B列から証券コードを取得（2行目以降）---
+    b_col   = ws.col_values(2)
+    tickers = [v.strip() for v in b_col[1:] if v.strip()]  # 2行目以降・空白除外
+    print(f"  スプレッドシートから {len(tickers)} 銘柄を読み込みました\n")
 
-    update_latest_sheet( ss.worksheet(SHEET_LATEST),  data_list, updated_at)
-    append_history_sheet(ss.worksheet(SHEET_HISTORY), data_list)
+    # --- 株価取得 ---
+    close_col      = []  # F列に書き込む終値
+    change_pct_col = []  # G列に書き込む前日比(%)
+
+    for i, ticker in enumerate(tickers, 1):
+        print(f"  [{i:>3}/{len(tickers)}] {ticker} 取得中...")
+        close, change_pct = fetch_one(ticker)
+        close_col.append([close if close is not None else ""])
+        change_pct_col.append([change_pct if change_pct is not None else ""])
+        time.sleep(0.3)
+
+    # --- F列・G列に一括書き込み ---
+    print("\n  スプレッドシートに書き込み中...")
+    last_row = len(tickers) + 1  # 2行目スタートなので+1
+
+    ws.update(f"F2:F{last_row}", close_col,      value_input_option="USER_ENTERED")
+    ws.update(f"G2:G{last_row}", change_pct_col, value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
-    print(f"  完了！")
+    print(f"  完了！ {len(tickers)} 銘柄を更新しました")
+    print(f"  更新日時: {updated_at}")
     print(f"{'='*50}\n")
 
 
