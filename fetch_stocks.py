@@ -95,8 +95,8 @@ def main():
     print("\n  スプレッドシートに書き込み中...")
     last_row = len(tickers) + 1  # 2行目スタートなので+1
 
-    ws.update(f"F2:F{last_row}", close_col,      value_input_option="USER_ENTERED")
-    ws.update(f"G2:G{last_row}", change_pct_col, value_input_option="USER_ENTERED")
+    ws.update(f"G2:G{last_row}", close_col,      value_input_option="USER_ENTERED")
+    ws.update(f"H2:H{last_row}", change_pct_col, value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
     print(f"  完了！ {len(tickers)} 銘柄を更新しました")
