@@ -48,21 +48,29 @@ def fetch_one(ticker: str):
             print(f"  WARNING {ticker}: データなし")
             return None, None
 
-        latest    = hist.iloc[-1]
-        prev      = hist.iloc[-2] if len(hist) >= 2 else None
-        close_raw = latest["Close"]
+        latest = hist.iloc[-1]
+        prev   = hist.iloc[-2] if len(hist) >= 2 else None
 
-        if close_raw is None or (isinstance(close_raw, float) and not math.isfinite(close_raw)):
+        try:
+            close_f = float(latest["Close"])
+            if not math.isfinite(close_f):
+                raise ValueError
+        except (TypeError, ValueError):
             print(f"  WARNING {ticker}: 終値が無効な値")
             return None, None
 
-        close      = round(float(close_raw), 1)
-        prev_close = prev["Close"] if prev is not None else None
+        close = round(close_f, 1)
 
-        if prev_close is not None and (not isinstance(prev_close, (int, float)) or not math.isfinite(float(prev_close))):
-            prev_close = None
+        prev_close = None
+        if prev is not None:
+            try:
+                prev_f = float(prev["Close"])
+                if math.isfinite(prev_f):
+                    prev_close = prev_f
+            except (TypeError, ValueError):
+                pass
 
-        change_pct = round((close - float(prev_close)) / float(prev_close) * 100, 2) if prev_close else ""
+        change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else ""
 
         return close, change_pct
 
