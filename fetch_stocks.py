@@ -116,6 +116,7 @@ def main():
 
     ws.update(range_name=f"G2:G{last_row}", values=close_col,      value_input_option="USER_ENTERED")
     ws.update(range_name=f"H2:H{last_row}", values=change_pct_col, value_input_option="USER_ENTERED")
+    ws.update(range_name="L1", values=[[updated_at]], value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
     print(f"  完了！ {len(tickers)} 銘柄を更新しました")
