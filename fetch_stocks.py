@@ -8,6 +8,7 @@ import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import math
 import time
 import os
@@ -18,6 +19,7 @@ import json
 # ============================================================
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SHEET_NAME     = "最新株価"
+JST = ZoneInfo("Asia/Tokyo")
 
 # ============================================================
 # 関数定義
@@ -84,7 +86,7 @@ def fetch_one(ticker: str):
 # ============================================================
 
 def main():
-    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M JST")
+    updated_at = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     print(f"\n{'='*50}")
     print(f"  株価取得開始: {updated_at}")
     print(f"{'='*50}\n")
