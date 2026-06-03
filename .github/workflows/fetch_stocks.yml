@@ -2,8 +2,8 @@ name: 毎日株価取得
 
 on:
   schedule:
-    # 毎日 15:26 JST (= UTC 06:30) に実行
-    - cron: "26 6 * * 1-5"   # 平日のみ（月〜金）
+    # 毎日 15:26 JST (= UTC 04:26) に実行
+    - cron: "26 4 * * 1-5"   # 平日のみ（月〜金）
   workflow_dispatch:          # 手動実行も可能
 
 jobs:
