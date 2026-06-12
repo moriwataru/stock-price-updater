@@ -1,7 +1,8 @@
 """
 日本株 株価自動取得スクリプト
-- スプレッドシートのB列から証券コードを読み取る
-- 終値をF列、前日比(%)をG列に上書きする
+- スプレッドシートのA列（証券コードの数字）とB列（接尾辞、例: T）を読み、
+  yfinance 用に「1234.T」のように結合する
+- 終値をH列、前日比(%)をI列に上書きする
 """
 
 import yfinance as yf
@@ -38,6 +39,35 @@ def get_gspread_client():
     ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     return gspread.authorize(creds)
+
+
+def code_from_cell(a_raw) -> str:
+    """A列のセル値を証券コードの数字部分に正規化する（シートの数値・文字列の両方に対応）"""
+    if a_raw is None:
+        return ""
+    s = str(a_raw).strip()
+    if not s:
+        return ""
+    try:
+        n = float(s.replace(",", ""))
+        if not math.isfinite(n):
+            return s
+        if abs(n - round(n)) < 1e-9:
+            return str(int(round(n)))
+        return s
+    except ValueError:
+        return s
+
+
+def parse_row_to_ticker(row: list) -> str | None:
+    """1行分の A,B からティッカー文字列を組み立てる。不足時は None"""
+    padded = (list(row) + ["", ""])[:2]
+    a_raw, b_raw = padded[0], padded[1]
+    code = code_from_cell(a_raw)
+    suffix = str(b_raw).strip() if b_raw is not None else ""
+    if not code or not suffix:
+        return None
+    return f"{code}.{suffix}"
 
 
 def fetch_one(ticker: str):
@@ -96,32 +126,44 @@ def main():
     ss     = client.open_by_key(SPREADSHEET_ID)
     ws     = ss.worksheet(SHEET_NAME)
 
-    # --- B列から証券コードを取得（2行目以降）---
-    b_col   = ws.col_values(2)
-    tickers = [v.strip() for v in b_col[1:] if v.strip()]  # 2行目以降・空白除外
-    print(f"  スプレッドシートから {len(tickers)} 銘柄を読み込みました\n")
+    # --- A列・B列からティッカーを組み立て（2行目以降、範囲 A2:B）---
+    rows = ws.get_values("A2:B")
+    if not rows:
+        print("  データ行がありません（A2:B が空）。")
+        return
 
-    # --- 株価取得 ---
-    close_col      = []  # F列に書き込む終値
-    change_pct_col = []  # G列に書き込む前日比(%)
+    valid_total = sum(1 for row in rows if parse_row_to_ticker(row) is not None)
+    print(f"  スプレッドシートから {len(rows)} 行を読み込み（うち {valid_total} 銘柄を取得）\n")
 
-    for i, ticker in enumerate(tickers, 1):
-        print(f"  [{i:>3}/{len(tickers)}] {ticker} 取得中...")
+    # --- 株価取得 → H列・I列用の [終値, 前日比(%)] ---
+    hi_values: list[list] = []
+    done = 0
+
+    for row in rows:
+        ticker = parse_row_to_ticker(row)
+        if ticker is None:
+            hi_values.append(["", ""])
+            continue
+        done += 1
+        print(f"  [{done:>3}/{valid_total}] {ticker} 取得中...")
         close, change_pct = fetch_one(ticker)
-        close_col.append([close if close is not None else ""])
-        change_pct_col.append([change_pct if change_pct is not None else ""])
+        hi_values.append(
+            [
+                close if close is not None else "",
+                change_pct if change_pct is not None else "",
+            ]
+        )
         time.sleep(0.3)
 
-    # --- F列・G列に一括書き込み ---
+    # --- H列・I列に一括書き込み ---
     print("\n  スプレッドシートに書き込み中...")
-    last_row = len(tickers) + 1  # 2行目スタートなので+1
+    last_row = len(rows) + 1  # 2行目スタートなので +1
 
-    ws.update(range_name=f"G2:G{last_row}", values=close_col,      value_input_option="USER_ENTERED")
-    ws.update(range_name=f"H2:H{last_row}", values=change_pct_col, value_input_option="USER_ENTERED")
+    ws.update(range_name=f"H2:I{last_row}", values=hi_values, value_input_option="USER_ENTERED")
     ws.update(range_name="L1", values=[[updated_at]], value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
-    print(f"  完了！ {len(tickers)} 銘柄を更新しました")
+    print(f"  完了！ {valid_total} 銘柄を更新しました（全 {len(rows)} 行）")
     print(f"  更新日時: {updated_at}")
     print(f"{'='*50}\n")
 
