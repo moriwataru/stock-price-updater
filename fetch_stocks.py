@@ -2,13 +2,13 @@
 日本株 株価自動取得スクリプト
 - スプレッドシートのA列（証券コードの数字）とB列（接尾辞、例: T）を読み、
   yfinance 用に「1234.T」のように結合する
-- 終値をH列、前日比(%)をI列に上書きする
+- 終値をH列、前日比(%)をI列、1か月前比(%)をJ列、3か月前比(%)をK列に上書きする
 """
 
 import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import math
 import time
@@ -70,15 +70,36 @@ def parse_row_to_ticker(row: list) -> str | None:
     return f"{code}.{suffix}"
 
 
+def _close_near_days_ago(hist, days: int) -> float | None:
+    """履歴からおおよそ days 日前の終値を返す"""
+    if hist.empty:
+        return None
+    target = hist.index[-1] - timedelta(days=days)
+    past = hist.loc[hist.index <= target]
+    if past.empty:
+        return None
+    try:
+        v = float(past.iloc[-1]["Close"])
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _pct_change(current: float, past: float | None) -> float | str:
+    if past is None or past == 0:
+        return ""
+    return round((current - past) / past * 100, 2)
+
+
 def fetch_one(ticker: str):
-    """1銘柄の終値と前日比(%)を取得して返す"""
+    """1銘柄の終値、前日比(%)、1か月前比(%)、3か月前比(%)を取得して返す"""
     try:
         stock = yf.Ticker(ticker)
-        hist  = stock.history(period="2d")
+        hist  = stock.history(period="6mo")
 
         if hist.empty:
             print(f"  WARNING {ticker}: データなし")
-            return None, None
+            return None, None, None, None
 
         latest = hist.iloc[-1]
         prev   = hist.iloc[-2] if len(hist) >= 2 else None
@@ -89,7 +110,7 @@ def fetch_one(ticker: str):
                 raise ValueError
         except (TypeError, ValueError):
             print(f"  WARNING {ticker}: 終値が無効な値")
-            return None, None
+            return None, None, None, None
 
         close = round(close_f, 1)
 
@@ -102,13 +123,15 @@ def fetch_one(ticker: str):
             except (TypeError, ValueError):
                 pass
 
-        change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else ""
+        change_pct  = _pct_change(close_f, prev_close)
+        change_1m   = _pct_change(close_f, _close_near_days_ago(hist, 30))
+        change_3m   = _pct_change(close_f, _close_near_days_ago(hist, 90))
 
-        return close, change_pct
+        return close, change_pct, change_1m, change_3m
 
     except Exception as e:
         print(f"  ERROR {ticker}: {e}")
-        return None, None
+        return None, None, None, None
 
 
 # ============================================================
@@ -135,32 +158,34 @@ def main():
     valid_total = sum(1 for row in rows if parse_row_to_ticker(row) is not None)
     print(f"  スプレッドシートから {len(rows)} 行を読み込み（うち {valid_total} 銘柄を取得）\n")
 
-    # --- 株価取得 → H列・I列用の [終値, 前日比(%)] ---
-    hi_values: list[list] = []
+    # --- 株価取得 → H〜K列用の [終値, 前日比(%), 1か月前比(%), 3か月前比(%)] ---
+    hijk_values: list[list] = []
     done = 0
 
     for row in rows:
         ticker = parse_row_to_ticker(row)
         if ticker is None:
-            hi_values.append(["", ""])
+            hijk_values.append(["", "", "", ""])
             continue
         done += 1
         print(f"  [{done:>3}/{valid_total}] {ticker} 取得中...")
-        close, change_pct = fetch_one(ticker)
-        hi_values.append(
+        close, change_pct, change_1m, change_3m = fetch_one(ticker)
+        hijk_values.append(
             [
                 close if close is not None else "",
                 change_pct if change_pct is not None else "",
+                change_1m if change_1m is not None else "",
+                change_3m if change_3m is not None else "",
             ]
         )
         time.sleep(0.3)
 
-    # --- H列・I列に一括書き込み ---
+    # --- H〜K列に一括書き込み ---
     print("\n  スプレッドシートに書き込み中...")
     last_row = len(rows) + 1  # 2行目スタートなので +1
 
-    ws.update(range_name=f"H2:I{last_row}", values=hi_values, value_input_option="USER_ENTERED")
-    ws.update(range_name="L1", values=[[updated_at]], value_input_option="USER_ENTERED")
+    ws.update(range_name=f"H2:K{last_row}", values=hijk_values, value_input_option="USER_ENTERED")
+    ws.update(range_name="N1", values=[[updated_at]], value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
     print(f"  完了！ {valid_total} 銘柄を更新しました（全 {len(rows)} 行）")
