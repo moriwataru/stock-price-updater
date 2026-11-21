@@ -191,7 +191,7 @@ def main():
     last_row = len(rows) + 1  # 2行目スタートなので +1
 
     ws.update(range_name=f"H2:M{last_row}", values=output_values, value_input_option="USER_ENTERED")
-    ws.update(range_name="N1", values=[[updated_at]], value_input_option="USER_ENTERED")
+    ws.update(range_name="P1", values=[[updated_at]], value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
     print(f"  完了！ {valid_total} 銘柄を更新しました（全 {len(rows)} 行）")
