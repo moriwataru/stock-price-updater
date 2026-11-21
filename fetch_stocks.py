@@ -2,7 +2,8 @@
 日本株 株価自動取得スクリプト
 - スプレッドシートのA列（証券コードの数字）とB列（接尾辞、例: T）を読み、
   yfinance 用に「1234.T」のように結合する
-- 終値をH列、前日比(%)をI列、1か月前比(%)をJ列、3か月前比(%)をK列に上書きする
+- 終値をH列、前日比(%)をI列、1か月前比(%)をJ列、3か月前比(%)をK列、
+  6か月前比(%)をL列、1年前比(%)をM列に上書きする
 """
 
 import yfinance as yf
@@ -92,14 +93,15 @@ def _pct_change(current: float, past: float | None) -> float | str:
 
 
 def fetch_one(ticker: str):
-    """1銘柄の終値、前日比(%)、1か月前比(%)、3か月前比(%)を取得して返す"""
+    """1銘柄の終値、前日比(%)、1か月前比(%)、3か月前比(%)、6か月前比(%)、1年前比(%)を取得して返す"""
+    empty = (None, None, None, None, None, None)
     try:
         stock = yf.Ticker(ticker)
-        hist  = stock.history(period="6mo")
+        hist  = stock.history(period="2y")
 
         if hist.empty:
             print(f"  WARNING {ticker}: データなし")
-            return None, None, None, None
+            return empty
 
         latest = hist.iloc[-1]
         prev   = hist.iloc[-2] if len(hist) >= 2 else None
@@ -110,7 +112,7 @@ def fetch_one(ticker: str):
                 raise ValueError
         except (TypeError, ValueError):
             print(f"  WARNING {ticker}: 終値が無効な値")
-            return None, None, None, None
+            return empty
 
         close = round(close_f, 1)
 
@@ -126,12 +128,14 @@ def fetch_one(ticker: str):
         change_pct  = _pct_change(close_f, prev_close)
         change_1m   = _pct_change(close_f, _close_near_days_ago(hist, 30))
         change_3m   = _pct_change(close_f, _close_near_days_ago(hist, 90))
+        change_6m   = _pct_change(close_f, _close_near_days_ago(hist, 180))
+        change_1y   = _pct_change(close_f, _close_near_days_ago(hist, 365))
 
-        return close, change_pct, change_1m, change_3m
+        return close, change_pct, change_1m, change_3m, change_6m, change_1y
 
     except Exception as e:
         print(f"  ERROR {ticker}: {e}")
-        return None, None, None, None
+        return empty
 
 
 # ============================================================
@@ -158,33 +162,35 @@ def main():
     valid_total = sum(1 for row in rows if parse_row_to_ticker(row) is not None)
     print(f"  スプレッドシートから {len(rows)} 行を読み込み（うち {valid_total} 銘柄を取得）\n")
 
-    # --- 株価取得 → H〜K列用の [終値, 前日比(%), 1か月前比(%), 3か月前比(%)] ---
-    hijk_values: list[list] = []
+    # --- 株価取得 → H〜M列用 ---
+    output_values: list[list] = []
     done = 0
 
     for row in rows:
         ticker = parse_row_to_ticker(row)
         if ticker is None:
-            hijk_values.append(["", "", "", ""])
+            output_values.append(["", "", "", "", "", ""])
             continue
         done += 1
         print(f"  [{done:>3}/{valid_total}] {ticker} 取得中...")
-        close, change_pct, change_1m, change_3m = fetch_one(ticker)
-        hijk_values.append(
+        close, change_pct, change_1m, change_3m, change_6m, change_1y = fetch_one(ticker)
+        output_values.append(
             [
                 close if close is not None else "",
                 change_pct if change_pct is not None else "",
                 change_1m if change_1m is not None else "",
                 change_3m if change_3m is not None else "",
+                change_6m if change_6m is not None else "",
+                change_1y if change_1y is not None else "",
             ]
         )
         time.sleep(0.3)
 
-    # --- H〜K列に一括書き込み ---
+    # --- H〜M列に一括書き込み ---
     print("\n  スプレッドシートに書き込み中...")
     last_row = len(rows) + 1  # 2行目スタートなので +1
 
-    ws.update(range_name=f"H2:K{last_row}", values=hijk_values, value_input_option="USER_ENTERED")
+    ws.update(range_name=f"H2:M{last_row}", values=output_values, value_input_option="USER_ENTERED")
     ws.update(range_name="N1", values=[[updated_at]], value_input_option="USER_ENTERED")
 
     print(f"\n{'='*50}")
